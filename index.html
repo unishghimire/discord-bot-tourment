@@ -2,180 +2,215 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>eSports Bot - Slash Commands Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eSports Manager Bot Dashboard</title>
     <style>
-        body { font-family: 'Inter', sans-serif; background: #0f1014; color: #ced4da; padding: 40px; }
-        .card { background: #1a1c23; border-radius: 12px; padding: 25px; margin-bottom: 20px; border: 1px solid #2d2f39; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
-        .flex { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
-        input, button { padding: 12px 18px; border-radius: 8px; border: none; font-size: 14px; }
-        input { background: #252731; color: white; border: 1px solid #3e414d; flex-grow: 1; }
-        button { background: #5865f2; color: white; cursor: pointer; font-weight: 600; transition: 0.2s; }
-        button:hover { background: #4752c4; }
-        .btn-sync { background: #eb459e; }
-        #log { height: 250px; overflow-y: auto; background: #000; padding: 15px; font-family: 'Consolas', monospace; font-size: 13px; border-radius: 8px; color: #00ffcc; border: 1px solid #333; }
-        .badge { background: #3ba55c; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; text-transform: uppercase; }
-        h2 { color: #fff; margin-top: 0; }
-        code { background: #252731; padding: 2px 5px; border-radius: 4px; color: #ff80ab; }
+        :root { --discord-blurple: #5865F2; --discord-dark: #313338; --discord-black: #1E1F22; --success: #23A559; --danger: #F23F43; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--discord-black); color: #DBDEE1; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .app-container { width: 100%; max-width: 900px; }
+        .card { background: var(--discord-dark); border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #444; }
+        h1, h2, h3 { color: white; margin-top: 0; }
+        .status-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+        .indicator { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); }
+        .indicator.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+        input { background: #1E1F22; border: 1px solid #444; color: white; padding: 12px; border-radius: 4px; width: 100%; box-sizing: border-box; margin-bottom: 10px; font-family: monospace; }
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 4px; color: white; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-primary { background: var(--discord-blurple); }
+        .btn-primary:hover { background: #4752C4; }
+        .btn-sync { background: #EB459E; }
+        #console { background: #000; color: #00FF00; padding: 15px; border-radius: 5px; height: 300px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 13px; line-height: 1.5; }
+        .match-row { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #444; }
+        code { background: #2b2d31; padding: 2px 5px; border-radius: 4px; color: #00A8FC; }
     </style>
 </head>
 <body>
 
-<div style="max-width: 1000px; margin: auto;">
-    <h2>🏆 Tournament Bot Dashboard</h2>
-    
+<div class="app-container">
     <div class="card">
-        <h3>1. Authentication & Setup</h3>
-        <div class="flex">
-            <input type="password" id="token" placeholder="Bot Token">
-            <input type="text" id="appId" placeholder="Application (Client) ID">
+        <h1>🏆 eSports Tournament Bot</h1>
+        <div class="status-bar">
+            <div id="status-indicator" class="indicator"></div>
+            <span id="status-text">Bot is Offline</span>
         </div>
-        <div class="flex">
-            <button onclick="connectBot()">Connect WebSocket</button>
-            <button class="btn-sync" onclick="registerCommands()">Sync Slash Commands</button>
+
+        <label>Bot Token</label>
+        <input type="password" id="botToken" value="MTQ2NDUyMTA2OTgwODQ1NTc4NQ.Gf0ElM.eCKEGOykDTdX6VwApcuAXQjZovhAs9Rh7Chy3E">
+        
+        <label>Client (Application) ID</label>
+        <input type="text" id="clientId" value="1464521069808455785">
+
+        <div class="btn-group">
+            <button class="btn-primary" onclick="startBot()">Connect Bot</button>
+            <button class="btn-sync" onclick="syncSlashCommands()">Sync / Commands</button>
         </div>
-        <p>Status: <span id="status" style="color:#f04747">OFFLINE</span> | Commands registered: <span id="cmd-status">No</span></p>
     </div>
 
     <div class="card">
-        <h3>2. Live Tournament Stats</h3>
-        <div id="tourney-summary">No active tournament.</div>
-        <div id="log" style="margin-top:15px;"></div>
+        <h3>Live Tournament Control</h3>
+        <div id="tourney-status">No active tournament session.</div>
+        <div id="match-list"></div>
+    </div>
+
+    <div class="card">
+        <h3>System Logs</h3>
+        <div id="console"></div>
     </div>
 </div>
 
 <script>
     let socket;
-    let tournament = JSON.parse(localStorage.getItem('es_tourney')) || { name: "", teams: [], matches: [], status: 'none' };
-    const proxy = "https://corsproxy.io/?";
+    let tournament = { name: "None", teams: [], matches: [], status: 'Idle' };
+    const proxy = "https://api.allorigins.win/raw?url=";
 
-    function log(text, color = "#00ffcc") {
-        const logEl = document.getElementById('log');
-        logEl.innerHTML += `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${text}</div>`;
-        logEl.scrollTop = logEl.scrollHeight;
+    function log(msg, color = "#00FF00") {
+        const consoleEl = document.getElementById('console');
+        const time = new Date().toLocaleTimeString();
+        consoleEl.innerHTML += `<div style="color:${color}">[${time}] ${msg}</div>`;
+        consoleEl.scrollTop = consoleEl.scrollHeight;
     }
 
-    // --- REGISTRATION LOGIC ---
-    async function registerCommands() {
-        const token = document.getElementById('token').value;
-        const appId = document.getElementById('appId').value;
-        if(!token || !appId) return alert("Enter Token and Application ID!");
-
+    // --- SLASH COMMAND SYNC ---
+    async function syncSlashCommands() {
+        const token = document.getElementById('botToken').value;
+        const appId = document.getElementById('clientId').value;
+        
         const commands = [
-            { name: "create", description: "Start a new tournament", options: [{ name: "name", description: "Tournament name", type: 3, required: true }] },
-            { name: "join", description: "Join with your team name", options: [{ name: "team", description: "Your Team Name", type: 3, required: true }] },
-            { name: "status", description: "View bracket and team list" },
-            { name: "start", description: "Generate the first round of matches" }
+            { name: "create", description: "Start a new tournament", options: [{ name: "name", description: "Name of the event", type: 3, required: true }] },
+            { name: "join", description: "Register your team", options: [{ name: "team", description: "Team Name", type: 3, required: true }] },
+            { name: "start", description: "Generate the bracket and start matches" },
+            { name: "status", description: "Check current teams and matches" }
         ];
 
-        log("Attempting to sync Slash Commands...");
+        log("Attempting to sync slash commands...", "#00A8FC");
+        
         try {
-            const resp = await fetch(`${proxy}https://discord.com/api/v10/applications/${appId}/commands`, {
+            // Using a direct fetch first, if CORS fails, use the console hack instructions
+            const response = await fetch(`${proxy}${encodeURIComponent(`https://discord.com/api/v10/applications/${appId}/commands`)}`, {
                 method: 'PUT',
-                headers: { 'Authorization': `Bot ${token}`, 'Content-Type': 'application/json' },
+                headers: { 
+                    'Authorization': `Bot ${token}`, 
+                    'Content-Type': 'application/json' 
+                },
                 body: JSON.stringify(commands)
             });
-            if(resp.ok) {
-                log("✅ Commands Synced! (Might take an hour for Global, or 1 min for new bots)", "#43b581");
-                document.getElementById('cmd-status').innerText = "YES";
+
+            if(response.ok) {
+                log("✅ Slash Commands Synced! Restart your Discord client to see them.", "var(--success)");
             } else {
-                const err = await resp.json();
-                log("❌ Sync Error: " + JSON.stringify(err), "#f04747");
+                const err = await response.json();
+                log("❌ Sync Error: " + JSON.stringify(err), "var(--danger)");
+                log("Note: If you see 'Internal Network Error', copy-paste the sync code into the Discord Web Console.", "#FFCC00");
             }
-        } catch(e) { log("Error: " + e.message, "red"); }
+        } catch (e) {
+            log("Fetch Error: " + e.message, "var(--danger)");
+        }
     }
 
-    // --- CONNECTION LOGIC ---
-    function connectBot() {
-        const token = document.getElementById('token').value;
-        if(!token) return alert("Token missing!");
-
+    // --- BOT CONNECTION ---
+    function startBot() {
+        const token = document.getElementById('botToken').value;
+        
         socket = new WebSocket("wss://gateway.discord.gg/?v=10&encoding=json");
 
-        socket.onmessage = async (e) => {
-            const { op, t, d } = JSON.parse(e.data);
+        socket.onopen = () => log("Gateway connection established. Authenticating...");
 
-            if(op === 10) { // Hello
+        socket.onmessage = async (event) => {
+            const data = JSON.parse(event.data);
+            const { op, t, d } = data;
+
+            if (op === 10) { // Hello
                 setInterval(() => socket.send(JSON.stringify({ op: 1, d: null })), d.heartbeat_interval);
                 socket.send(JSON.stringify({
                     op: 2,
-                    d: { token, intents: 0, properties: { $os: "web", $browser: "chrome", $device: "pc" } }
+                    d: {
+                        token: token,
+                        intents: 0, // Slash commands don't need intents
+                        properties: { $os: "linux", $browser: "chrome", $device: "pc" }
+                    }
                 }));
             }
 
-            if(t === "READY") {
-                document.getElementById('status').innerText = "ONLINE";
-                document.getElementById('status').style.color = "#43b581";
-                log("Bot connected as " + d.user.username);
+            if (t === "READY") {
+                document.getElementById('status-indicator').className = "indicator online";
+                document.getElementById('status-text').innerText = `Online as ${d.user.username}`;
+                log(`Connected as ${d.user.username}#${d.user.discriminator}`, "var(--success)");
             }
 
-            if(t === "INTERACTION_CREATE") {
+            if (t === "INTERACTION_CREATE") {
                 handleInteraction(d, token);
             }
         };
+
+        socket.onclose = () => {
+            document.getElementById('status-indicator').className = "indicator";
+            document.getElementById('status-text').innerText = "Bot is Offline";
+            log("Disconnected from Discord.", "var(--danger)");
+        };
     }
 
-    // --- INTERACTION HANDLING ---
+    // --- COMMAND LOGIC ---
     async function handleInteraction(i, token) {
         const { name, options } = i.data;
-        const channel = i.channel_id;
-        let responseText = "";
+        let reply = "";
 
-        log(`Slash Command used: /${name}`, "#5865f2");
+        log(`Received Command: /${name}`, "#EB459E");
 
         if (name === "create") {
-            const tourneyName = options[0].value;
-            tournament = { name: tourneyName, teams: [], matches: [], status: 'registration' };
-            responseText = `🏆 Tournament **${tourneyName}** created! Use \`/join\` to enter.`;
-        } 
-        
-        else if (name === "join") {
-            if (tournament.status !== 'registration') {
-                responseText = "❌ Registration is not open.";
-            } else {
-                const teamName = options[0].value;
-                tournament.teams.push({ name: teamName, leader: i.member.user.username });
-                responseText = `✅ Team **${teamName}** registered! Total: ${tournament.teams.length}`;
-            }
+            const n = options[0].value;
+            tournament = { name: n, teams: [], matches: [], status: 'Registration Open' };
+            reply = `🏆 **Tournament Created: ${n}**\nTeams can now join using \`/join [TeamName]\``;
         }
 
-        else if (name === "status") {
-            responseText = `📊 **Tournament:** ${tournament.name || "None"}\n**Teams:** ${tournament.teams.length || 0}\n` +
-                          (tournament.matches.length > 0 ? "Matches generated. Check dashboard." : "Waiting to start...");
+        else if (name === "join") {
+            if (tournament.status === 'Idle') {
+                reply = "❌ No active tournament. Use `/create` first.";
+            } else {
+                const teamName = options[0].value;
+                tournament.teams.push({ name: teamName, captain: i.member.user.username });
+                reply = `✅ **Team ${teamName}** has entered the battle! (${tournament.teams.length} teams total)`;
+            }
         }
 
         else if (name === "start") {
             if (tournament.teams.length < 2) {
-                responseText = "❌ Need at least 2 teams!";
+                reply = "❌ Need at least 2 teams to generate a bracket!";
             } else {
-                tournament.status = 'active';
-                responseText = `🚀 **Tournament Started!** ${tournament.teams.length} teams are in the bracket.`;
+                tournament.status = "In Progress";
+                tournament.matches = [];
+                for (let j = 0; j < tournament.teams.length; j += 2) {
+                    if (tournament.teams[j+1]) {
+                        tournament.matches.push(`${tournament.teams[j].name} vs ${tournament.teams[j+1].name}`);
+                    }
+                }
+                reply = `🚀 **Tournament Started!**\n**Round 1 Matches:**\n${tournament.matches.join('\n')}`;
             }
         }
 
-        // Send Interaction Callback
-        await sendCallback(i.id, i.token, responseText, token);
-        save();
-    }
+        else if (name === "status") {
+            reply = `📊 **Tournament:** ${tournament.name}\n**Status:** ${tournament.status}\n**Teams (${tournament.teams.length}):** ${tournament.teams.map(t => t.name).join(', ') || 'None'}`;
+        }
 
-    async function sendCallback(id, iToken, text, botToken) {
-        const url = `${proxy}https://discord.com/api/v10/interactions/${id}/${iToken}/callback`;
-        await fetch(url, {
+        // Send response back to Discord
+        await fetch(`https://discord.com/api/v10/interactions/${i.id}/${i.token}/callback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
-                data: { content: text }
-            })
+            body: JSON.stringify({ type: 4, data: { content: reply } })
         });
+
+        updateDashboard();
     }
 
-    function save() {
-        localStorage.setItem('es_tourney', JSON.stringify(tournament));
-        document.getElementById('tourney-summary').innerHTML = tournament.name ? 
-            `<span class="badge">Live</span> <strong>${tournament.name}</strong> (${tournament.teams.length} teams)` : "No active event.";
+    function updateDashboard() {
+        document.getElementById('tourney-status').innerHTML = `
+            <strong>Active Event:</strong> ${tournament.name} <br>
+            <strong>Status:</strong> ${tournament.status} <br>
+            <strong>Teams:</strong> ${tournament.teams.length}
+        `;
+        
+        const matchList = document.getElementById('match-list');
+        matchList.innerHTML = tournament.matches.map(m => `<div class="match-row"><span>${m}</span> <span style="color:var(--success)">LIVE</span></div>`).join('');
     }
-
-    save();
 </script>
 
 </body>
