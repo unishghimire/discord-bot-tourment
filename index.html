@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>eSports Bot - Slash Commands Edition</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #0f1014; color: #ced4da; padding: 40px; }
+        .card { background: #1a1c23; border-radius: 12px; padding: 25px; margin-bottom: 20px; border: 1px solid #2d2f39; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .flex { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+        input, button { padding: 12px 18px; border-radius: 8px; border: none; font-size: 14px; }
+        input { background: #252731; color: white; border: 1px solid #3e414d; flex-grow: 1; }
+        button { background: #5865f2; color: white; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        button:hover { background: #4752c4; }
+        .btn-sync { background: #eb459e; }
+        #log { height: 250px; overflow-y: auto; background: #000; padding: 15px; font-family: 'Consolas', monospace; font-size: 13px; border-radius: 8px; color: #00ffcc; border: 1px solid #333; }
+        .badge { background: #3ba55c; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; text-transform: uppercase; }
+        h2 { color: #fff; margin-top: 0; }
+        code { background: #252731; padding: 2px 5px; border-radius: 4px; color: #ff80ab; }
+    </style>
+</head>
+<body>
+
+<div style="max-width: 1000px; margin: auto;">
+    <h2>🏆 Tournament Bot Dashboard</h2>
+    
+    <div class="card">
+        <h3>1. Authentication & Setup</h3>
+        <div class="flex">
+            <input type="password" id="token" placeholder="Bot Token">
+            <input type="text" id="appId" placeholder="Application (Client) ID">
+        </div>
+        <div class="flex">
+            <button onclick="connectBot()">Connect WebSocket</button>
+            <button class="btn-sync" onclick="registerCommands()">Sync Slash Commands</button>
+        </div>
+        <p>Status: <span id="status" style="color:#f04747">OFFLINE</span> | Commands registered: <span id="cmd-status">No</span></p>
+    </div>
+
+    <div class="card">
+        <h3>2. Live Tournament Stats</h3>
+        <div id="tourney-summary">No active tournament.</div>
+        <div id="log" style="margin-top:15px;"></div>
+    </div>
+</div>
+
+<script>
+    let socket;
+    let tournament = JSON.parse(localStorage.getItem('es_tourney')) || { name: "", teams: [], matches: [], status: 'none' };
+    const proxy = "https://corsproxy.io/?";
+
+    function log(text, color = "#00ffcc") {
+        const logEl = document.getElementById('log');
+        logEl.innerHTML += `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${text}</div>`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // --- REGISTRATION LOGIC ---
+    async function registerCommands() {
+        const token = document.getElementById('token').value;
+        const appId = document.getElementById('appId').value;
+        if(!token || !appId) return alert("Enter Token and Application ID!");
+
+        const commands = [
+            { name: "create", description: "Start a new tournament", options: [{ name: "name", description: "Tournament name", type: 3, required: true }] },
+            { name: "join", description: "Join with your team name", options: [{ name: "team", description: "Your Team Name", type: 3, required: true }] },
+            { name: "status", description: "View bracket and team list" },
+            { name: "start", description: "Generate the first round of matches" }
+        ];
+
+        log("Attempting to sync Slash Commands...");
+        try {
+            const resp = await fetch(`${proxy}https://discord.com/api/v10/applications/${appId}/commands`, {
+                method: 'PUT',
+                headers: { 'Authorization': `Bot ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(commands)
+            });
+            if(resp.ok) {
+                log("✅ Commands Synced! (Might take an hour for Global, or 1 min for new bots)", "#43b581");
+                document.getElementById('cmd-status').innerText = "YES";
+            } else {
+                const err = await resp.json();
+                log("❌ Sync Error: " + JSON.stringify(err), "#f04747");
+            }
+        } catch(e) { log("Error: " + e.message, "red"); }
+    }
+
+    // --- CONNECTION LOGIC ---
+    function connectBot() {
+        const token = document.getElementById('token').value;
+        if(!token) return alert("Token missing!");
+
+        socket = new WebSocket("wss://gateway.discord.gg/?v=10&encoding=json");
+
+        socket.onmessage = async (e) => {
+            const { op, t, d } = JSON.parse(e.data);
+
+            if(op === 10) { // Hello
+                setInterval(() => socket.send(JSON.stringify({ op: 1, d: null })), d.heartbeat_interval);
+                socket.send(JSON.stringify({
+                    op: 2,
+                    d: { token, intents: 0, properties: { $os: "web", $browser: "chrome", $device: "pc" } }
+                }));
+            }
+
+            if(t === "READY") {
+                document.getElementById('status').innerText = "ONLINE";
+                document.getElementById('status').style.color = "#43b581";
+                log("Bot connected as " + d.user.username);
+            }
+
+            if(t === "INTERACTION_CREATE") {
+                handleInteraction(d, token);
+            }
+        };
+    }
+
+    // --- INTERACTION HANDLING ---
+    async function handleInteraction(i, token) {
+        const { name, options } = i.data;
+        const channel = i.channel_id;
+        let responseText = "";
+
+        log(`Slash Command used: /${name}`, "#5865f2");
+
+        if (name === "create") {
+            const tourneyName = options[0].value;
+            tournament = { name: tourneyName, teams: [], matches: [], status: 'registration' };
+            responseText = `🏆 Tournament **${tourneyName}** created! Use \`/join\` to enter.`;
+        } 
+        
+        else if (name === "join") {
+            if (tournament.status !== 'registration') {
+                responseText = "❌ Registration is not open.";
+            } else {
+                const teamName = options[0].value;
+                tournament.teams.push({ name: teamName, leader: i.member.user.username });
+                responseText = `✅ Team **${teamName}** registered! Total: ${tournament.teams.length}`;
+            }
+        }
+
+        else if (name === "status") {
+            responseText = `📊 **Tournament:** ${tournament.name || "None"}\n**Teams:** ${tournament.teams.length || 0}\n` +
+                          (tournament.matches.length > 0 ? "Matches generated. Check dashboard." : "Waiting to start...");
+        }
+
+        else if (name === "start") {
+            if (tournament.teams.length < 2) {
+                responseText = "❌ Need at least 2 teams!";
+            } else {
+                tournament.status = 'active';
+                responseText = `🚀 **Tournament Started!** ${tournament.teams.length} teams are in the bracket.`;
+            }
+        }
+
+        // Send Interaction Callback
+        await sendCallback(i.id, i.token, responseText, token);
+        save();
+    }
+
+    async function sendCallback(id, iToken, text, botToken) {
+        const url = `${proxy}https://discord.com/api/v10/interactions/${id}/${iToken}/callback`;
+        await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
+                data: { content: text }
+            })
+        });
+    }
+
+    function save() {
+        localStorage.setItem('es_tourney', JSON.stringify(tournament));
+        document.getElementById('tourney-summary').innerHTML = tournament.name ? 
+            `<span class="badge">Live</span> <strong>${tournament.name}</strong> (${tournament.teams.length} teams)` : "No active event.";
+    }
+
+    save();
+</script>
+
+</body>
+</html>
