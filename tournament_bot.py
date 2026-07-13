@@ -43,6 +43,10 @@ import aiohttp
 import os
 import asyncio
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Load .env file if present (local dev). Render injects vars directly.
+load_dotenv()
 
 # ══════════════════════════════════════════════════════════
 #  CONFIG  — all values come from environment variables
@@ -1161,8 +1165,19 @@ async def cmd_help(interaction: discord.Interaction):
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    missing = []
     if not BOT_TOKEN:
-        raise RuntimeError("DISCORD_BOT_TOKEN is not set in environment!")
+        missing.append("DISCORD_BOT_TOKEN")
     if not SVC_TOKEN:
-        raise RuntimeError("BASE44_SERVICE_TOKEN is not set in environment!")
+        missing.append("BASE44_SERVICE_TOKEN")
+    if missing:
+        print("[NexPlay] ══════════════════════════════════════════")
+        print("[NexPlay] STARTUP FAILED — missing environment vars:")
+        for m in missing:
+            print("[NexPlay]   ✗ " + m + " is not set")
+        print("[NexPlay] Set these in Render → Environment → Add Env Var")
+        print("[NexPlay] ══════════════════════════════════════════")
+        raise SystemExit(1)
+    print("[NexPlay] All environment variables verified.")
+    print("[NexPlay] Guild ID: " + str(HOME_GUILD))
     bot.run(BOT_TOKEN, log_level=20)
