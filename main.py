@@ -61,7 +61,7 @@ DISCORD_API = "https://discord.com/api/v10"
 
 # ── Role names that count as "staff" in any server ────────
 STAFF_ROLE_NAMES = {
-    "NexPlay Owner", "Tournament Host", "Admin", "Moderator",
+    "NexPlay Owner", "Tournament Host", "Admin", "Moderator", "NexPlay Admin",
     "Owner", "Co-Owner", "Manager", "Staff",
 }
 
@@ -272,7 +272,7 @@ def now_ts() -> int:
 def is_staff(member: discord.Member) -> bool:
     for role in member.roles:
         clean = role.name
-        for prefix in ("👑 ", "⚔️ ", "🛡️ ", "🔧 ", "🎮 "):
+        for prefix in ("👑 ", "⚔️ ", "🛡️ ", "🔧 ", "🎮 ", "🎯 ", "⚙️ ", "🏆 ", "🔥 ", "⛏️ ", "📋 ", "🌱 ", "🤖 "):
             clean = clean.replace(prefix, "")
         if clean in STAFF_ROLE_NAMES:
             return True
