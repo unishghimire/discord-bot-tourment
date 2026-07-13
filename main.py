@@ -679,6 +679,96 @@ async def cmd_setup(interaction: discord.Interaction):
 
 
 # ── /create_tournament ────────────────────────────────────
+
+async def make_tournament_channels(guild: discord.Guild, tournament_name: str) -> dict:
+    """
+    Create a dedicated category + 8 channels for each tournament.
+    
+    Format: <short_name>-<channel>
+    Example: For "NexPlay Open 2026":
+      Category: 🏆 NPO26
+        #npo26-info
+        #npo26-announcements  
+        #npo26-roadmap
+        #npo26-results
+        #npo26-groups
+        #npo26-register
+        #npo26-confirm-teams
+        #npo26-help
+    
+    Returns dict with channel IDs.
+    """
+    import re
+    
+    # ── Generate short name from tournament name ──────────────────────────────
+    words = tournament_name.strip().split()
+    short = ""
+    if len(words) == 1:
+        # Single word: take first 4 chars
+        short = words[0][:4].lower()
+    else:
+        # Multiple words: take first letter of each word + last word digits if any
+        initials = "".join(w[0] for w in words if w).lower()
+        # Add any numbers found in the name
+        nums = re.sub(r"[^0-9]", "", tournament_name)[-2:]
+        short = (initials + nums)[:6]
+    
+    short = re.sub(r"[^a-z0-9]", "", short)[:6]
+    if not short:
+        short = "tourney"
+
+    cat_name = f"🏆 {short.upper()}"
+    
+    # Sub-channels: (key, channel_suffix, topic)
+    channels_def = [
+        ("info",          f"{short}-info",           "📋 Tournament information, rules and details"),
+        ("announcements", f"{short}-announcements",   "📢 Official tournament announcements"),
+        ("roadmap",       f"{short}-roadmap",         "🗺️ Tournament roadmap and schedule overview"),
+        ("results",       f"{short}-results",         "🏅 Match results and standings"),
+        ("groups",        f"{short}-groups",          "🎯 Group draws and bracket reveal"),
+        ("register",      f"{short}-register",        "✍️ Player registration — use /register here"),
+        ("confirm-teams", f"{short}-confirm-teams",   "✅ Team confirmation and roster lock"),
+        ("help",          f"{short}-help",            "❓ Support and help for this tournament"),
+    ]
+    
+    result = {"short_name": short, "category_name": cat_name}
+    
+    # ── Create or find category ───────────────────────────────────────────────
+    category = discord.utils.get(guild.categories, name=cat_name)
+    if not category:
+        try:
+            category = await guild.create_category(
+                cat_name,
+                reason=f"NexPlay: Tournament '{tournament_name}' channels"
+            )
+        except Exception as e:
+            log(f"[ERROR] Could not create category {cat_name}: {e}")
+            category = None
+    
+    result["category_id"] = str(category.id) if category else None
+
+    # ── Create each channel ───────────────────────────────────────────────────
+    for key, ch_name, topic in channels_def:
+        existing = discord.utils.get(guild.text_channels, name=ch_name)
+        if not existing:
+            try:
+                ch = await guild.create_text_channel(
+                    ch_name,
+                    category=category,
+                    topic=topic,
+                    reason=f"NexPlay: {tournament_name} tournament"
+                )
+                result[key] = str(ch.id)
+            except Exception as e:
+                log(f"[ERROR] Could not create #{ch_name}: {e}")
+                result[key] = None
+        else:
+            result[key] = str(existing.id)
+    
+    log(f"[Channels] Created tournament channels for '{tournament_name}' → category '{cat_name}'")
+    return result
+
+
 @tree.command(name="create_tournament", description="Create and announce a new tournament")
 @app_commands.describe(
     name="Tournament name", game="Game",
@@ -713,8 +803,19 @@ async def cmd_create(
     await interaction.response.defer(thinking=True)
     gid = str(interaction.guild.id)
 
-    ch_ann = resolve_channel(interaction.guild, "announcements")
-    ch_reg = resolve_channel(interaction.guild, "registration")
+    # ── Create per-tournament dedicated channels ──────────────────────────────
+    t_channels = await make_tournament_channels(interaction.guild, name)
+    short      = t_channels.get("short_name", "tourney")
+    cat_name   = t_channels.get("category_name", "🏆 Tournament")
+
+    ch_ann_id  = int(t_channels["announcements"]) if t_channels.get("announcements") else None
+    ch_reg_id  = int(t_channels["register"])       if t_channels.get("register")       else None
+    ch_info_id = int(t_channels["info"])           if t_channels.get("info")           else None
+    ch_road_id = int(t_channels["roadmap"])        if t_channels.get("roadmap")        else None
+    ch_grp_id  = int(t_channels["groups"])         if t_channels.get("groups")         else None
+    ch_res_id  = int(t_channels["results"])        if t_channels.get("results")        else None
+    ch_cfm_id  = int(t_channels["confirm-teams"])  if t_channels.get("confirm-teams")  else None
+    ch_hlp_id  = int(t_channels["help"])           if t_channels.get("help")           else None
 
     poster  = img_url(name, game, "poster",  "prize " + prize_pool + " date " + date)
     roadmap = img_url(name, game, "roadmap")
@@ -725,62 +826,183 @@ async def cmd_create(
         "status": "registration_open", "max_players": max_players,
         "registered_count": 0, "tournament_date": date,
         "poster_image_url": poster, "roadmap_image_url": roadmap,
-        "announcement_channel_id": str(ch_ann.id) if ch_ann else "",
-        "registration_channel_id": str(ch_reg.id) if ch_reg else "",
+        "announcement_channel_id": str(ch_ann_id) if ch_ann_id else "",
+        "registration_channel_id": str(ch_reg_id) if ch_reg_id else "",
+        "short_name": short, "category_name": cat_name,
         "created_by_discord_id": str(interaction.user.id), "started_at": now_iso(),
     })
 
     fmt_label = {"single_elim": "Single Elimination", "double_elim": "Double Elimination",
                  "round_robin": "Round Robin", "battle_royale": "Battle Royale"}.get(fmt, fmt)
 
-    if ch_ann:
-        ann = discord.Embed(
-            title=name + " — TOURNAMENT ANNOUNCED!",
+    tid = rec.get("id", "")
+
+    # ── 1. #info — full tournament details ───────────────────────────────────
+    if ch_info_id:
+        info_e = discord.Embed(
+            title="📋 " + name + " — Tournament Info",
             description=(
-                "Game: " + game + "\nFormat: " + fmt_label + "\n"
-                "Prize Pool: " + prize_pool + "\nDate: " + date +
-                "\nMax Players: " + str(max_players) +
-                ("\n\n" + description if description else "") +
-                "\n\n**Roadmap:** Registration → Group Draw → Schedule → Match Day → Champion"
+                "**Game:** " + game + "\n"
+                "**Format:** " + fmt_label + "\n"
+                "**Prize Pool:** " + prize_pool + "\n"
+                "**Date:** " + date + "\n"
+                "**Max Players:** " + str(max_players) +
+                ("\n\n" + description if description else "")
+            ),
+            color=0x5865F2, timestamp=datetime.now(timezone.utc)
+        )
+        info_e.set_thumbnail(url=poster)
+        info_e.add_field(name="📢 Announcements", value="<#" + str(ch_ann_id) + ">" if ch_ann_id else "—", inline=True)
+        info_e.add_field(name="✍️ Register", value="<#" + str(ch_reg_id) + ">" if ch_reg_id else "—", inline=True)
+        info_e.add_field(name="🗺️ Roadmap", value="<#" + str(ch_road_id) + ">" if ch_road_id else "—", inline=True)
+        info_e.add_field(name="🎯 Groups", value="<#" + str(ch_grp_id) + ">" if ch_grp_id else "—", inline=True)
+        info_e.add_field(name="🏅 Results", value="<#" + str(ch_res_id) + ">" if ch_res_id else "—", inline=True)
+        info_e.add_field(name="❓ Help", value="<#" + str(ch_hlp_id) + ">" if ch_hlp_id else "—", inline=True)
+        info_e.set_footer(text="NexPlay Tournament System | ID: " + short.upper())
+        await dpost(ch_info_id, info_e)
+
+    # ── 2. #announcements — poster + announcement ─────────────────────────────
+    if ch_ann_id:
+        ann_e = discord.Embed(
+            title="🏆 " + name + " — OFFICIALLY ANNOUNCED!",
+            description=(
+                "The tournament is here! Get ready.\n\n"
+                "**Game:** " + game + " | **Prize:** " + prize_pool + "\n"
+                "**Date:** " + date + " | **Format:** " + fmt_label + "\n\n"
+                "Register now in <#" + str(ch_reg_id) + "> before slots fill up!"
             ),
             color=0xFFD700, timestamp=datetime.now(timezone.utc)
         )
-        ann.set_image(url=poster)
-        ann.set_footer(text="NexPlay Tournament System")
-        await dpost(ch_ann.id, ann)
+        ann_e.set_image(url=poster)
+        ann_e.set_footer(text="NexPlay Tournament System")
+        await dpost(ch_ann_id, ann_e)
 
-    if ch_reg:
-        reg = discord.Embed(
-            title="Registration OPEN — " + name,
+    # ── 3. #roadmap — roadmap image + stages ─────────────────────────────────
+    if ch_road_id:
+        road_e = discord.Embed(
+            title="🗺️ " + name + " — Roadmap",
             description=(
-                "Registration is now **OPEN**!\n\nGame: " + game + "  |  Prize: " + prize_pool +
-                "\nDate: " + date + "  |  Slots: " + str(max_players) +
-                "\n\nUse `/register` and enter your in-game name to join!"
+                "**Tournament Stages:**\n\n"
+                "① 📋 **Registration Open** → Register in <#" + str(ch_reg_id) + ">\n"
+                "② ✅ **Confirm Teams** → Confirm in <#" + str(ch_cfm_id) + ">\n"
+                "③ 🎯 **Group Draw** → Groups revealed in <#" + str(ch_grp_id) + ">\n"
+                "④ ⚔️ **Match Day** → Schedule + results in <#" + str(ch_res_id) + ">\n"
+                "⑤ 🏆 **Champion Crowned** → Winner announced!\n\n"
+                "Stay tuned in <#" + str(ch_ann_id) + "> for all updates."
+            ),
+            color=0x00B4D8, timestamp=datetime.now(timezone.utc)
+        )
+        road_e.set_image(url=roadmap)
+        road_e.set_footer(text="NexPlay Tournament System")
+        await dpost(ch_road_id, road_e)
+
+    # ── 4. #register — registration instructions ─────────────────────────────
+    if ch_reg_id:
+        reg_e = discord.Embed(
+            title="✍️ Registration OPEN — " + name,
+            description=(
+                "**Slots:** " + str(max_players) + " players\n"
+                "**Game:** " + game + " | **Prize:** " + prize_pool + "\n\n"
+                "**How to register:**\n"
+                "> Use `/register` and enter your in-game name\n\n"
+                "After registering, go to <#" + str(ch_cfm_id) + "> to confirm your team."
             ),
             color=0x00FF7F, timestamp=datetime.now(timezone.utc)
         )
-        reg.set_image(url=roadmap)
-        reg.set_footer(text="NexPlay Tournament System")
-        await dpost(ch_reg.id, reg)
+        reg_e.set_footer(text="NexPlay | Use /register to join")
+        await dpost(ch_reg_id, reg_e)
 
-    if rec.get("id") and ch_ann:
+    # ── 5. #confirm-teams — confirmation instructions ─────────────────────────
+    if ch_cfm_id:
+        cfm_e = discord.Embed(
+            title="✅ Team Confirmation — " + name,
+            description=(
+                "After registering in <#" + str(ch_reg_id) + ">, confirm your team here.\n\n"
+                "**Rules:**\n"
+                "> ✅ Confirm your in-game name is correct\n"
+                "> ✅ Be online 30 min before match time\n"
+                "> ❌ No-shows will be disqualified\n\n"
+                "Groups will be revealed in <#" + str(ch_grp_id) + "> after registration closes."
+            ),
+            color=0xFFA500, timestamp=datetime.now(timezone.utc)
+        )
+        cfm_e.set_footer(text="NexPlay Tournament System")
+        await dpost(ch_cfm_id, cfm_e)
+
+    # ── 6. #groups — placeholder ──────────────────────────────────────────────
+    if ch_grp_id:
+        grp_e = discord.Embed(
+            title="🎯 Groups — " + name,
+            description=(
+                "Groups will be posted here after registration closes.\n\n"
+                "Use `/generate_groups " + name + "` to draw groups.\n\n"
+                "Registration → <#" + str(ch_reg_id) + ">"
+            ),
+            color=0x9B59B6, timestamp=datetime.now(timezone.utc)
+        )
+        grp_e.set_footer(text="NexPlay Tournament System")
+        await dpost(ch_grp_id, grp_e)
+
+    # ── 7. #results — placeholder ─────────────────────────────────────────────
+    if ch_res_id:
+        res_e = discord.Embed(
+            title="🏅 Results — " + name,
+            description=(
+                "Match results will be posted here during the tournament.\n\n"
+                "Use `/post_result` to record match outcomes.\n\n"
+                "Groups → <#" + str(ch_grp_id) + ">"
+            ),
+            color=0xFF6B35, timestamp=datetime.now(timezone.utc)
+        )
+        res_e.set_footer(text="NexPlay Tournament System")
+        await dpost(ch_res_id, res_e)
+
+    # ── 8. #help — support instructions ──────────────────────────────────────
+    if ch_hlp_id:
+        hlp_e = discord.Embed(
+            title="❓ Help & Support — " + name,
+            description=(
+                "Need help with this tournament? Ask here!\n\n"
+                "**Common questions:**\n"
+                "> ✍️ Register → <#" + str(ch_reg_id) + ">\n"
+                "> 🗺️ Roadmap → <#" + str(ch_road_id) + ">\n"
+                "> 📋 Rules → <#" + str(ch_info_id) + ">\n\n"
+                "Staff will assist you. For urgent issues ping @Tournament Host."
+            ),
+            color=0x95A5A6, timestamp=datetime.now(timezone.utc)
+        )
+        hlp_e.set_footer(text="NexPlay Support")
+        await dpost(ch_hlp_id, hlp_e)
+
+    # ── Log to DB ─────────────────────────────────────────────────────────────
+    if tid and ch_ann_id:
         await b44_create("AnnouncementLog", {
-            "tournament_id": rec["id"], "guild_id": gid,
-            "milestone": "tournament_created", "channel_id": str(ch_ann.id),
-            "announced_at": now_iso(), "content_summary": "Created: " + name,
+            "tournament_id": tid, "guild_id": gid,
+            "milestone": "tournament_created",
+            "channel_id": str(ch_ann_id),
+            "announced_at": now_iso(),
+            "content_summary": "Created: " + name + " | Channels: " + cat_name,
         })
 
+    # ── Confirmation to staff member ──────────────────────────────────────────
     done = discord.Embed(
-        title="✅ Tournament Created!",
+        title="✅ Tournament Created — " + name,
         description=(
-            "**" + name + "** is live!\n\n"
-            "Poster → " + (ch_ann.mention if ch_ann else "#announcements") + "\n"
-            "Registration → " + (ch_reg.mention if ch_reg else "#registration") + "\n"
-            "Images via Pollinations.ai"
-        ), color=0xFFD700
+            "**Category:** " + cat_name + "\n\n"
+            "**Channels created:**\n"
+            "📋 <#" + str(ch_info_id) + "> — Info\n"
+            "📢 <#" + str(ch_ann_id) + "> — Announcements\n"
+            "🗺️ <#" + str(ch_road_id) + "> — Roadmap\n"
+            "✍️ <#" + str(ch_reg_id) + "> — Register\n"
+            "✅ <#" + str(ch_cfm_id) + "> — Confirm Teams\n"
+            "🎯 <#" + str(ch_grp_id) + "> — Groups\n"
+            "🏅 <#" + str(ch_res_id) + "> — Results\n"
+            "❓ <#" + str(ch_hlp_id) + "> — Help\n"
+        ),
+        color=0xFFD700
     )
-    done.set_image(url=poster)
-    done.set_footer(text="NexPlay")
+    done.set_thumbnail(url=poster)
+    done.set_footer(text="NexPlay | Pollinations.ai imagery")
     await interaction.followup.send(embed=done)
 
 
