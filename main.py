@@ -480,30 +480,126 @@ async def handle_support(message: discord.Message) -> None:
     ue.timestamp = datetime.now(timezone.utc)
     await message.channel.send(embed=ue)
 
-    # Staff log (only when escalated)
+    # ── Save to DB always (for escalation tracking) ─────────────────────────
+    support_rec = await b44_create("SupportMessage", {
+        "guild_id":        gid,
+        "message":         q[:500],
+        "status":          "pending" if routed else "resolved",
+        "guild_name":      message.guild.name,
+    })
+
+    # ── Staff log + pending tracker (only for escalated queries) ─────────────
+    STAFF_RESPONSE_TIMEOUT = 600  # 10 minutes
+
     if routed and ch_staff:
-        high  = cat in ("Account", "Complaint")
-        se    = discord.Embed(
-            title=("🚨 ESCALATED" if high else "⚠️ FLAGGED") + " — Support Alert | " + cat,
+        high = cat in ("Account", "Complaint")
+        se   = discord.Embed(
+            title=("🚨 " if high else "⚠️ ") + "SUPPORT PENDING — " + cat,
+            description=(
+                "A user asked something in <#" + str(message.channel.id) + "> "
+                "that needs **staff attention**.\n"
+                "If no staff responds within **10 minutes**, this will be marked 🔴 UNRESOLVED."
+            ),
             color=0xFF4444 if high else 0xFF9900,
             timestamp=datetime.now(timezone.utc)
         )
-        se.add_field(name="User", value=message.author.mention + " (" + message.author.display_name + ")", inline=True)
-        se.add_field(name="Channel", value=message.channel.mention, inline=True)
-        se.add_field(name="Question", value=q[:500], inline=False)
+        se.add_field(
+            name="👤 User",
+            value=message.author.mention + " (`" + str(message.author.name) + "`)",
+            inline=True
+        )
+        se.add_field(name="📍 Channel", value=message.channel.mention, inline=True)
+        se.add_field(name="🏷️ Category", value=cat, inline=True)
+        se.add_field(
+            name="💬 Message Summary",
+            value="> " + (q[:300] + "..." if len(q) > 300 else q),
+            inline=False
+        )
+        se.add_field(
+            name="🤖 Bot Response Given",
+            value="> " + (resp[:200] + "..." if len(resp) > 200 else resp),
+            inline=False
+        )
         if tips:
-            se.add_field(name="Suggested Actions", value="\n".join("> " + t for t in tips), inline=False)
-        se.add_field(name="Jump", value="[Go to message](" + message.jump_url + ")", inline=False)
-        await dpost(ch_staff.id, se)
+            se.add_field(
+                name="📋 Suggested Staff Actions",
+                value="\n".join("• " + t for t in tips),
+                inline=False
+            )
+        se.add_field(name="🔗 Jump to Message", value="[Click here](" + message.jump_url + ")", inline=False)
+        se.set_footer(text="Status: 🟡 PENDING — Awaiting staff reply | NexPlay Support System")
 
-        # Log to DB
-        await b44_create("SupportMessage", {
-            "guild_id": gid, "user_discord_id": str(message.author.id),
-            "user_username": str(message.author.name),
-            "question": q[:500], "ai_response": resp[:500],
-            "confidence_score": 0.5 if cat == "Unknown" else 0.9,
-            "routed_to_human": True, "category": cat,
-        })
+        staff_log_msg = await dpost(ch_staff.id, se)
+
+        # ── Background task: auto-escalate if no staff reply in timeout ──────
+        async def check_staff_response():
+            await asyncio.sleep(STAFF_RESPONSE_TIMEOUT)
+            # Check if anyone (staff) replied after the user's message in that channel
+            try:
+                replied = False
+                async for m in message.channel.history(after=message, limit=20):
+                    if m.author.bot:
+                        continue
+                    roles = [r.name for r in getattr(m.author, "roles", [])]
+                    if any(r in roles for r in STAFF_ROLES):
+                        replied = True
+                        break
+
+                if not replied:
+                    # Update support record to unresolved
+                    if support_rec.get("id"):
+                        await b44_update("SupportMessage", support_rec["id"], {"status": "unresolved"})
+
+                    # Edit the staff-log embed to show UNRESOLVED
+                    if staff_log_msg and isinstance(staff_log_msg, dict) and staff_log_msg.get("id"):
+                        unres_e = discord.Embed(
+                            title="🔴 UNRESOLVED — " + cat + " | No Staff Response",
+                            description=(
+                                "This support message was **not addressed** by any staff member within 10 minutes.\n\n"
+                                "**User:** " + message.author.mention + " (`" + str(message.author.name) + "`)\n"
+                                "**Channel:** <#" + str(message.channel.id) + ">\n"
+                                "**Original question:**\n> " + (q[:400] + "..." if len(q) > 400 else q)
+                            ),
+                            color=0xFF0000,
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        unres_e.add_field(
+                            name="📋 Action Required",
+                            value=(
+                                "• Reply to the user in <#" + str(message.channel.id) + ">\n"
+                                "• Or DM them directly: " + message.author.mention + "\n"
+                                "• Then mark resolved with `/resolve " + (support_rec.get("id","") or "") + "`"
+                            ),
+                            inline=False
+                        )
+                        unres_e.set_footer(text="🔴 UNRESOLVED — Please take action | NexPlay Support")
+                        try:
+                            ch_obj = bot.get_channel(ch_staff.id)
+                            if ch_obj:
+                                orig = await ch_obj.fetch_message(int(staff_log_msg["id"]))
+                                await orig.edit(embed=unres_e)
+                        except Exception as e:
+                            log(f"[WARN] Could not edit staff-log embed: {e}")
+
+                    # Ping staff in staff log
+                    try:
+                        ch_obj = bot.get_channel(ch_staff.id)
+                        if ch_obj:
+                            await ch_obj.send(
+                                f"@here 🔴 **Unresolved support from {message.author.mention}** — "
+                                f"please respond in {message.channel.mention}!"
+                            )
+                    except:
+                        pass
+                else:
+                    # Mark as resolved
+                    if support_rec.get("id"):
+                        await b44_update("SupportMessage", support_rec["id"], {"status": "resolved"})
+
+            except Exception as e:
+                log(f"[WARN] check_staff_response error: {e}")
+
+        asyncio.create_task(check_staff_response())
 
 
 # ══════════════════════════════════════════════════════════
@@ -742,9 +838,24 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # ── Support channel handler ───────────────────────────────────────────────
-    support_ch = resolve_channel(message.guild, "support")
-    if support_ch and message.channel.id == support_ch.id and len(message.content.strip()) > 3:
+    # ── Support / AI assistant handler ───────────────────────────────────────
+    # RULES:
+    #  1. Only fires in general public chat channels (NOT register, confirm-teams,
+    #     announcements, roadmap, groups, results, info, help, or private channels)
+    #  2. Never fires in DMs or any tournament-specific channel
+    #  3. If no staff responds within STAFF_RESPONSE_TIMEOUT, escalate to #staff-log
+    BLOCKED_SUFFIXES = (
+        "-register", "-announcements", "-roadmap", "-results",
+        "-groups", "-confirm-teams", "-info", "-help",
+    )
+    CHAT_NAMES = ("general", "💬│general", "chat", "talk", "lounge",
+                  "ff-general", "mc-general", "tourney-chat", "community")
+
+    ch_name_lower = message.channel.name.lower()
+    is_blocked    = any(ch_name_lower.endswith(s) for s in BLOCKED_SUFFIXES)
+    is_chat       = any(c in ch_name_lower for c in CHAT_NAMES)
+
+    if is_chat and not is_blocked and len(message.content.strip()) > 3:
         async with message.channel.typing():
             await handle_support(message)
         return
