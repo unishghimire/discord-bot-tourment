@@ -65,6 +65,8 @@ STAFF_ROLE_NAMES = {
     "Owner", "Co-Owner", "Manager", "Staff",
 }
 
+log = print  # alias
+
 # ── Status emoji map ───────────────────────────────────────
 STATUS_EMOJI = {
     "registration_open":   "🟢",
@@ -541,7 +543,7 @@ async def handle_support(message: discord.Message) -> None:
                     if m.author.bot:
                         continue
                     roles = [r.name for r in getattr(m.author, "roles", [])]
-                    if any(r in roles for r in STAFF_ROLES):
+                    if any(r in roles for r in STAFF_ROLE_NAMES):
                         replied = True
                         break
 
@@ -597,7 +599,7 @@ async def handle_support(message: discord.Message) -> None:
                         await b44_update("SupportMessage", support_rec["id"], {"status": "resolved"})
 
             except Exception as e:
-                log(f"[WARN] check_staff_response error: {e}")
+                print(f"[WARN] check_staff_response error: {e}")
 
         asyncio.create_task(check_staff_response())
 
