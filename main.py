@@ -2208,6 +2208,27 @@ async def cmd_help(interaction: discord.Interaction):
 
 
 # ══════════════════════════════════════════════════════════
+#  HEALTH-CHECK HTTP SERVER (required for Render Web Service / port check)
+# ══════════════════════════════════════════════════════════
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"NexPlay bot is running.")
+    def log_message(self, format, *args):
+        pass  # suppress request logs
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"[NexPlay] Health server listening on port {port}")
+    server.serve_forever()
+
+# ══════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -2226,4 +2247,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
     print("[NexPlay] All environment variables verified.")
     print("[NexPlay] Guild ID: " + str(HOME_GUILD))
+    # Start health-check server in background thread (satisfies Render port check)
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
     bot.run(BOT_TOKEN, log_level=20)

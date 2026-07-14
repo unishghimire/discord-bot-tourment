@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: nexplay-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
@@ -10,6 +10,7 @@ services:
       - key: BASE44_SERVICE_TOKEN
         sync: false
       - key: DISCORD_GUILD_ID
-        sync: false
+        value: "1008276731024658492"
       - key: APP_ID
-        value: 6a5226b5047f5c59d961130e
+        value: "6a5226b5047f5c59d961130e"
+    healthCheckPath: /
