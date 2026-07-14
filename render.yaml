@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: nexplay-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: BASE44_SERVICE_TOKEN
+        sync: false
+      - key: APP_ID
+        sync: false
+      - key: GUILD_ID
+        sync: false
