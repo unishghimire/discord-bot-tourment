@@ -9,7 +9,7 @@ services:
         sync: false
       - key: BASE44_SERVICE_TOKEN
         sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
       - key: APP_ID
-        sync: false
-      - key: GUILD_ID
-        sync: false
+        value: 6a5226b5047f5c59d961130e

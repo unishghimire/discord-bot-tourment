@@ -54,7 +54,7 @@ load_dotenv()
 BOT_TOKEN   = os.environ.get("DISCORD_BOT_TOKEN", "")
 HOME_GUILD  = int(os.environ.get("DISCORD_GUILD_ID", "0"))   # owner's server only
 SVC_TOKEN   = os.environ.get("BASE44_SERVICE_TOKEN", "")
-APP_ID      = "6a5226b5047f5c59d961130e"
+APP_ID      = os.environ.get("APP_ID", "6a5226b5047f5c59d961130e")
 
 BASE44_API  = "https://base44.app/api/apps/" + APP_ID + "/entities"
 DISCORD_API = "https://discord.com/api/v10"
